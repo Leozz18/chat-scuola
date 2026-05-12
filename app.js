@@ -51,6 +51,15 @@
     var REACT_PICKER_EMOJIS = ['👍', '❤️', '😂', '😮', '😢'];
     var pendingReactions = [];
 
+    /** Evita invii duplicati di ricevute di lettura per lo stesso id messaggio. */
+    var readReceiptSentSet = {};
+
+    /** Messaggi più vecchi di questo timestamp (unix sec) non generano invio READ (evita flood in cronologia). */
+    var readReceiptMinEligibleTimeSec = 9007199254740991;
+
+    /** READ da inviare quando la scheda torna visibile (tab in background). */
+    var pendingReadReceipts = [];
+
     var WB_FLUSH_MS = 500;
     var WB_DRAW_PREFIX = '[DRAWB]';
 
@@ -60,8 +69,19 @@
     var wbLastY = 0;
     var wbFlushIntervalId = null;
     var wbSegmentQueue = [];
+    var cursorTimeouts = {};
     var wbIsEraser = false;
     var wbCurrentColor = '#5b8cff';
+
+    function scrollMessagesToBottom() {
+        if (!el.messages) return;
+        var sc = el.chatMessages;
+        if (sc) {
+            sc.scrollTop = sc.scrollHeight;
+        } else {
+            el.messages.scrollTop = el.messages.scrollHeight;
+        }
+    }
 
     function getWhiteboardCanvas() {
         return el.whiteboard || null;
@@ -103,9 +123,9 @@
             clearInterval(wbFlushIntervalId);
             wbFlushIntervalId = null;
         }
-        if (el.whiteboardContainer) {
-            el.whiteboardContainer.classList.add('hidden');
-            el.whiteboardContainer.setAttribute('aria-hidden', 'true');
+        if (el.whiteboardOverlay) {
+            el.whiteboardOverlay.classList.add('hidden');
+            el.whiteboardOverlay.setAttribute('aria-hidden', 'true');
         }
         wbIsDrawing = false;
         var c = getWhiteboardCanvas();
@@ -128,6 +148,7 @@
         if (el.wbTextToolBtn) el.wbTextToolBtn.classList.remove('wb-text-tool-on');
         currentAppStatus = 'chat';
         whiteboardHideFloatingTextInput();
+        whiteboardClearRemoteCursors();
         whiteboardUpdateCanvasCursor();
     }
 
@@ -256,6 +277,101 @@
         return { x0: x0, y0: y0, x1: x1, y1: y1, col: col, w: w };
     }
 
+    function whiteboardRemoteCursorDomId(nick) {
+        return 'cursor-' + String(nick).replace(/[^a-zA-Z0-9_-]/g, '_');
+    }
+
+    function whiteboardCanvasToContainerPixels(canvasX, canvasY) {
+        var c = getWhiteboardCanvas();
+        var host = el.whiteboardContainer;
+        if (!c || !host) return { x: 0, y: 0 };
+        var cRect = c.getBoundingClientRect();
+        var hRect = host.getBoundingClientRect();
+        if (!cRect.width || !cRect.height) return { x: 0, y: 0 };
+        var scaleX = cRect.width / c.width;
+        var scaleY = cRect.height / c.height;
+        return {
+            x: cRect.left + canvasX * scaleX - hRect.left,
+            y: cRect.top + canvasY * scaleY - hRect.top
+        };
+    }
+
+    function updateRemoteCursor(nick, canvasX, canvasY) {
+        if (!nick || nick === myNick || !el.whiteboardContainer) return;
+        var px = whiteboardCanvasToContainerPixels(canvasX, canvasY);
+        var id = whiteboardRemoteCursorDomId(nick);
+        var elc = document.getElementById(id);
+        if (!elc) {
+            elc = document.createElement('div');
+            elc.id = id;
+            elc.className = 'remote-cursor';
+            elc.setAttribute('data-nick', nick);
+            elc.textContent = decodeHtmlEntities(String(nick));
+            elc.style.backgroundColor = getStringColor(nick);
+            el.whiteboardContainer.appendChild(elc);
+        }
+        elc.style.left = px.x + 'px';
+        elc.style.top = px.y + 'px';
+        elc.style.opacity = '1';
+        if (cursorTimeouts[nick]) {
+            clearTimeout(cursorTimeouts[nick]);
+        }
+        cursorTimeouts[nick] = setTimeout(function () {
+            var nid = whiteboardRemoteCursorDomId(nick);
+            var node = document.getElementById(nid);
+            if (node) {
+                node.style.opacity = '0';
+            }
+            delete cursorTimeouts[nick];
+        }, 3000);
+    }
+
+    function whiteboardRemoteCursorFromDrawBatch(nick, body) {
+        if (!body || typeof body !== 'string' || nick === myNick) return;
+        var parts = body.split('|');
+        var last = null;
+        var i;
+        for (i = 0; i < parts.length; i++) {
+            var parsed = whiteboardParseSegmentColons(parts[i].trim());
+            if (parsed) last = parsed;
+        }
+        if (last) {
+            updateRemoteCursor(nick, last.x1, last.y1);
+        }
+    }
+
+    function whiteboardRemoteCursorFromLegacyDraw(nick, line) {
+        if (nick === myNick) return;
+        var m = /^\[DRAW:([\d.-]+):([\d.-]+):([\d.-]+):([\d.-]+):([^:]+):([\d.-]+)\]/.exec(line.trim());
+        if (m) {
+            updateRemoteCursor(nick, parseFloat(m[3]), parseFloat(m[4]));
+        }
+    }
+
+    function whiteboardRemoteCursorFromDrawText(nick, trimmed) {
+        if (nick === myNick) return;
+        var m = /^\[DRAW_TEXT:([\d.-]+):([\d.-]+):/.exec(trimmed.trim());
+        if (m) {
+            updateRemoteCursor(nick, parseFloat(m[1]), parseFloat(m[2]));
+        }
+    }
+
+    function whiteboardClearRemoteCursors() {
+        var k;
+        for (k in cursorTimeouts) {
+            if (Object.prototype.hasOwnProperty.call(cursorTimeouts, k)) {
+                clearTimeout(cursorTimeouts[k]);
+            }
+        }
+        cursorTimeouts = {};
+        if (!el.whiteboardContainer) return;
+        var nodes = el.whiteboardContainer.querySelectorAll('.remote-cursor');
+        var ni;
+        for (ni = 0; ni < nodes.length; ni++) {
+            nodes[ni].remove();
+        }
+    }
+
     function whiteboardApplyBatchPayload(body) {
         if (!body || typeof body !== 'string') return;
         var chunks = body.split('|');
@@ -277,7 +393,7 @@
     }
 
     function whiteboardGetTextPositionRoot() {
-        return el.whiteboardRelativeRoot || el.whiteboardContainer;
+        return el.whiteboardContainer;
     }
 
     function whiteboardHideFloatingTextInput() {
@@ -404,13 +520,13 @@
     }
 
     function whiteboardIsPanelOpen() {
-        return el.whiteboardContainer && !el.whiteboardContainer.classList.contains('hidden');
+        return el.whiteboardOverlay && !el.whiteboardOverlay.classList.contains('hidden');
     }
 
     function whiteboardOpenPanel() {
-        if (!el.whiteboardContainer || !activeRoomKey) return;
-        el.whiteboardContainer.classList.remove('hidden');
-        el.whiteboardContainer.setAttribute('aria-hidden', 'false');
+        if (!el.whiteboardOverlay || !activeRoomKey) return;
+        el.whiteboardOverlay.classList.remove('hidden');
+        el.whiteboardOverlay.setAttribute('aria-hidden', 'false');
         if (el.wbColor && el.wbColor.value) {
             wbCurrentColor = el.wbColor.value;
         }
@@ -427,9 +543,9 @@
             clearInterval(wbFlushIntervalId);
             wbFlushIntervalId = null;
         }
-        if (el.whiteboardContainer) {
-            el.whiteboardContainer.classList.add('hidden');
-            el.whiteboardContainer.setAttribute('aria-hidden', 'true');
+        if (el.whiteboardOverlay) {
+            el.whiteboardOverlay.classList.add('hidden');
+            el.whiteboardOverlay.setAttribute('aria-hidden', 'true');
         }
         wbIsDrawing = false;
         currentAppStatus = 'chat';
@@ -438,6 +554,7 @@
             el.wbTextToolBtn.classList.remove('wb-text-tool-on');
         }
         whiteboardHideFloatingTextInput();
+        whiteboardClearRemoteCursors();
         whiteboardUpdateCanvasCursor();
     }
 
@@ -788,6 +905,11 @@
         return d.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
     }
 
+    function formatExportDateTime(unixSec) {
+        var d = new Date(unixSec * 1000);
+        return d.toLocaleString('it-IT', { dateStyle: 'short', timeStyle: 'medium' });
+    }
+
     function updateRoomTitle() {
         if (el.roomDisplay) {
             el.roomDisplay.textContent = activeRoomKey || '';
@@ -947,7 +1069,7 @@
         wrap.setAttribute('role', 'status');
         wrap.textContent = line;
         el.messages.appendChild(wrap);
-        el.messages.scrollTop = el.messages.scrollHeight;
+        scrollMessagesToBottom();
     }
 
     function normalizeOnlineUsersApi(raw) {
@@ -1050,9 +1172,27 @@
         return '[REPLY:' + msgId + '|' + safeNick + '|' + snippet + ']';
     }
 
+    /**
+     * Risposta a immagine: payload [REPLY_IMG:nick:base64troncato] (nick senza ']', troncato max 50).
+     */
+    function buildReplyImgPrefix(nick, resolvedTrim) {
+        var rest = String(resolvedTrim || '').trim();
+        if (rest.indexOf('[IMG]') !== 0) return null;
+        var tail = rest.slice(5);
+        var ix = tail.indexOf('base64,');
+        if (ix === -1) return null;
+        var b64 = tail.slice(ix + 7).replace(/\s/g, '');
+        var trunc = b64.slice(0, 50);
+        if (!trunc.length) return null;
+        var safeNick = String(nick || '').replace(/\]/g, '').replace(/\r|\n/g, ' ').trim();
+        if (!safeNick.length) safeNick = '?';
+        return '[REPLY_IMG:' + safeNick + ':' + trunc + ']';
+    }
+
     function insertReplyPrefix(msgId, nick, fullResolvedText) {
         if (!el.msgInput) return;
-        var prefix = buildReplyPrefix(msgId, nick, fullResolvedText) + '\n';
+        var imgPref = buildReplyImgPrefix(nick, fullResolvedText);
+        var prefix = (imgPref != null ? imgPref : buildReplyPrefix(msgId, nick, fullResolvedText)) + '\n';
         el.msgInput.value = prefix + el.msgInput.value;
         el.msgInput.focus();
         var pos = prefix.length;
@@ -1183,6 +1323,23 @@
         };
     }
 
+    function tryParseReplyImgBlock(textPlain) {
+        if (!textPlain || textPlain.indexOf('[REPLY_IMG:') !== 0) return null;
+        var close = textPlain.indexOf(']');
+        if (close < 12) return null;
+        var inner = textPlain.slice(11, close);
+        var li = inner.lastIndexOf(':');
+        if (li < 1) return null;
+        var trunc = inner.slice(li + 1);
+        var nick = inner.slice(0, li);
+        if (!/^[A-Za-z0-9+/=]{1,50}$/.test(trunc)) return null;
+        return {
+            replyNick: nick,
+            truncRef: trunc,
+            rest: textPlain.slice(close + 1).replace(/^\s+/, '')
+        };
+    }
+
     function renderReplyQuoteBlock(bodyEl, rp) {
         var quote = document.createElement('blockquote');
         quote.className = 'msg-reply-quote';
@@ -1192,6 +1349,21 @@
         var qs = document.createElement('div');
         qs.className = 'msg-reply-snippet';
         qs.textContent = rp.snippet;
+        quote.appendChild(qh);
+        quote.appendChild(qs);
+        bodyEl.appendChild(quote);
+    }
+
+    function renderReplyImgQuoteBlock(bodyEl, rp) {
+        var quote = document.createElement('blockquote');
+        quote.className = 'msg-reply-quote msg-reply-quote--media';
+        var qh = document.createElement('div');
+        qh.className = 'msg-reply-head';
+        qh.textContent = 'Risposta a un media';
+        var nickDisp = decodeHtmlEntities(rp.replyNick || '');
+        var qs = document.createElement('div');
+        qs.className = 'msg-reply-snippet msg-reply-snippet--media';
+        qs.textContent = '📷 [Immagine di ' + nickDisp + ']';
         quote.appendChild(qh);
         quote.appendChild(qs);
         bodyEl.appendChild(quote);
@@ -1326,6 +1498,18 @@
 
     function renderMessageBody(wrap, bodyEl, textPlain) {
         bodyEl.textContent = '';
+
+        var rpi = tryParseReplyImgBlock(textPlain);
+        if (rpi) {
+            renderReplyImgQuoteBlock(bodyEl, rpi);
+            if (rpi.rest && rpi.rest.trim()) {
+                var afterImg = document.createElement('div');
+                afterImg.className = 'msg-reply-after';
+                bodyEl.appendChild(afterImg);
+                renderMessageBody(wrap, afterImg, rpi.rest.trim());
+            }
+            return;
+        }
 
         var rp = tryParseReplyBlock(textPlain);
         if (rp) {
@@ -1737,29 +1921,135 @@
         });
     }
 
+    function isControlWireMessageSkipReadReceipt(trimmed) {
+        if (!trimmed) return true;
+        return (
+            /^\[READ:\d+\]\s*$/.test(trimmed) ||
+            /^\[REACT:\d+:/.test(trimmed) ||
+            /^\[VOTE:\d+:\d+\]\s*$/.test(trimmed) ||
+            /^\[DRAWB\]/.test(trimmed) ||
+            /^\[DRAW_CLEAR\]/.test(trimmed) ||
+            /^\[DRAW:/.test(trimmed) ||
+            /^\[DRAW_TEXT:/.test(trimmed)
+        );
+    }
+
+    function ensureOutgoingMessageTicks(wrap) {
+        if (!wrap || !wrap.classList.contains('me')) return;
+        if (wrap.querySelector('.message-ticks')) return;
+        var tick = document.createElement('span');
+        tick.className = 'message-ticks';
+        tick.setAttribute('aria-hidden', 'true');
+        wrap.appendChild(tick);
+    }
+
+    function maybeSendReadReceipt(msgId, resolvedTrim, msgTimeSec) {
+        if (!activeRoomKey || !myNick) return;
+        var tid = parseInt(String(msgId), 10);
+        if (isNaN(tid) || tid < 1) return;
+        if (readReceiptSentSet[tid]) return;
+        if (isControlWireMessageSkipReadReceipt(resolvedTrim)) return;
+        if (typeof msgTimeSec !== 'number' || isNaN(msgTimeSec)) return;
+        if (msgTimeSec < readReceiptMinEligibleTimeSec) return;
+        readReceiptSentSet[tid] = true;
+        if (document.hidden) {
+            if (pendingReadReceipts.indexOf(tid) === -1) {
+                pendingReadReceipts.push(tid);
+            }
+            return;
+        }
+        deliverOutgoingToServer('[READ:' + tid + ']', { skipInputClear: true, skipSendLock: true });
+    }
+
+    function flushPendingReadReceipts() {
+        if (document.hidden || !activeRoomKey || !myNick) return;
+        if (!pendingReadReceipts.length) return;
+        var list = pendingReadReceipts.slice();
+        pendingReadReceipts.length = 0;
+        var i;
+        for (i = 0; i < list.length; i++) {
+            (function (tid, delayMs) {
+                setTimeout(function () {
+                    if (!activeRoomKey || !myNick || document.hidden) return;
+                    deliverOutgoingToServer('[READ:' + tid + ']', {
+                        skipInputClear: true,
+                        skipSendLock: true
+                    });
+                }, delayMs);
+            })(list[i], i * 50);
+        }
+    }
+
+    function exportChatToTxtFile() {
+        if (!el.messages) return;
+        var parts = [];
+        var articles = el.messages.querySelectorAll('article.msg');
+        var i;
+        for (i = 0; i < articles.length; i++) {
+            var art = articles[i];
+            var ts = parseInt(art.getAttribute('data-msg-time'), 10);
+            var when = !isNaN(ts) ? formatExportDateTime(ts) : '?';
+            var nickEl = art.querySelector('.msg-nick');
+            var nick = nickEl ? nickEl.textContent.replace(/\s+/g, ' ').trim() : '?';
+            var body = art.querySelector('.msg-body');
+            var lineBody;
+            if (!body) {
+                lineBody = '';
+            } else if (body.querySelector('.msg-inline-img')) {
+                lineBody = '[Immagine condivisa]';
+            } else if (body.querySelector('.msg-file-attach')) {
+                lineBody = '[File condiviso]';
+            } else if (art.classList.contains('msg-poll')) {
+                var qEl = body.querySelector('.msg-poll-question');
+                lineBody = '[Sondaggio] ' + (qEl ? qEl.textContent.replace(/\s+/g, ' ').trim() : '');
+            } else {
+                lineBody = body.innerText.replace(/\s+/g, ' ').trim();
+            }
+            parts.push('[' + when + '] ' + nick + ': ' + lineBody);
+        }
+        var text = parts.join('\r\n');
+        var blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = 'chat_export.txt';
+        a.rel = 'noopener';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(function () {
+            URL.revokeObjectURL(url);
+        }, 4000);
+    }
+
     function appendMessageNode(m) {
         resolveMessageTextForDisplay(m.text).then(function (resolved) {
             var resolvedTrim = resolved.trim();
             var nickPlainEarly = decodeHtmlEntities(m.nick);
             if (/^\[DRAW_CLEAR\]\s*$/.test(resolvedTrim)) {
                 whiteboardClearCanvasVisual();
+                whiteboardClearRemoteCursors();
                 return;
             }
             if (/^\[DRAWB\]/.test(resolvedTrim)) {
                 if (nickPlainEarly !== myNick) {
-                    whiteboardApplyBatchPayload(resolvedTrim.slice(WB_DRAW_PREFIX.length));
+                    var batchBody = resolvedTrim.slice(WB_DRAW_PREFIX.length);
+                    whiteboardApplyBatchPayload(batchBody);
+                    whiteboardRemoteCursorFromDrawBatch(nickPlainEarly, batchBody);
                 }
                 return;
             }
             if (/^\[DRAW:/.test(resolvedTrim)) {
                 if (nickPlainEarly !== myNick) {
                     whiteboardApplySingleLegacy(resolvedTrim);
+                    whiteboardRemoteCursorFromLegacyDraw(nickPlainEarly, resolvedTrim);
                 }
                 return;
             }
             if (/^\[DRAW_TEXT:/.test(resolvedTrim)) {
                 if (nickPlainEarly !== myNick) {
                     whiteboardApplyDrawTextResolved(resolvedTrim);
+                    whiteboardRemoteCursorFromDrawText(nickPlainEarly, resolvedTrim);
                 }
                 return;
             }
@@ -1778,12 +2068,23 @@
                 }
                 return;
             }
+            if (/^\[READ:(\d+)\]\s*$/.test(resolvedTrim)) {
+                var readM = resolvedTrim.match(/^\[READ:(\d+)\]\s*$/);
+                if (readM && nickPlainEarly !== myNick && el.messages) {
+                    var ticksEl = el.messages.querySelector(
+                        '.msg.me[data-id="' + readM[1] + '"] .message-ticks'
+                    );
+                    if (ticksEl) ticksEl.classList.add('read-ticks');
+                }
+                return;
+            }
 
             var nickPlain = nickPlainEarly;
 
             var wrap = document.createElement('article');
             wrap.className = 'msg' + (nickPlain === myNick ? ' me' : '');
             wrap.dataset.id = String(m.id);
+            wrap.setAttribute('data-msg-time', String(m.time));
 
             var meta = document.createElement('div');
             meta.className = 'msg-meta';
@@ -1821,10 +2122,17 @@
             }
 
             buildMessageFooterActions(wrap, m, nickPlain, resolvedTrim);
+            if (nickPlain === myNick) {
+                ensureOutgoingMessageTicks(wrap);
+            }
             el.messages.appendChild(wrap);
             flushPendingReactions();
 
-            el.messages.scrollTop = el.messages.scrollHeight;
+            if (nickPlain !== myNick) {
+                maybeSendReadReceipt(m.id, resolvedTrim, m.time);
+            }
+
+            scrollMessagesToBottom();
         });
     }
 
@@ -1832,6 +2140,8 @@
         clearAllBurnTimeouts();
         pollVoteStore = {};
         pendingReactions = [];
+        readReceiptSentSet = {};
+        pendingReadReceipts.length = 0;
         while (el.messages.firstChild) {
             el.messages.removeChild(el.messages.firstChild);
         }
@@ -1970,6 +2280,9 @@
                                     if (/^\[REACT:\d+:/.test(pv)) {
                                         return;
                                     }
+                                    if (/^\[READ:\d+\]\s*$/.test(pv)) {
+                                        return;
+                                    }
                                     if (/^\[DRAWB\]/.test(pv) || /^\[DRAW_CLEAR\]/.test(pv) || /^\[DRAW:/.test(pv) || /^\[DRAW_TEXT:/.test(pv)) {
                                         return;
                                     }
@@ -2027,6 +2340,7 @@
                     waitingRoomKey = '';
                     lastMessageId = 0;
                     clearMessages();
+                    readReceiptMinEligibleTimeSec = Math.floor(Date.now() / 1000) - 5;
                     resetPresenceState();
                     roomWasPersisted = true;
                     showChatShell();
@@ -2208,6 +2522,7 @@
         invalidateCryptoCache();
         lastMessageId = 0;
         clearMessages();
+        readReceiptMinEligibleTimeSec = Math.floor(Date.now() / 1000) - 5;
         whiteboardResetForNewRoom();
         roomWasPersisted = true;
         updateRoomTitle();
@@ -2246,6 +2561,7 @@
         waitingRoomKey = '';
         roomWasPersisted = false;
         isHostCurrent = false;
+        readReceiptMinEligibleTimeSec = 9007199254740991;
         clearMessages();
         whiteboardResetForNewRoom();
         if (el.whiteboardOpenBtn) el.whiteboardOpenBtn.hidden = true;
@@ -2626,6 +2942,8 @@
         activeRoomKey = '';
         waitingRoomKey = '';
         roomPassword = '';
+        pendingReadReceipts.length = 0;
+        readReceiptSentSet = {};
         invalidateCryptoCache();
         if (el.nickInput) el.nickInput.value = '';
         showScreen('login-screen');
@@ -2639,6 +2957,7 @@
         stopAllPolls();
         waitingRoomKey = '';
         roomPassword = '';
+        pendingReadReceipts.length = 0;
         invalidateCryptoCache();
         showLobbyScreen();
     }
@@ -2657,6 +2976,7 @@
         waitingRoomKey = '';
         roomWasPersisted = false;
         isHostCurrent = false;
+        readReceiptMinEligibleTimeSec = 9007199254740991;
         clearMessages();
         if (el.msgInput) el.msgInput.value = '';
         updateRoomTitle();
@@ -2698,6 +3018,12 @@
         if (el.deleteRoomBtn) el.deleteRoomBtn.addEventListener('click', deleteRoom);
         if (el.backLobbyBtn) el.backLobbyBtn.addEventListener('click', onBackToLobby);
 
+        if (el.saveChatBtn) {
+            el.saveChatBtn.addEventListener('click', function () {
+                exportChatToTxtFile();
+            });
+        }
+
         if (el.sendBtn) el.sendBtn.addEventListener('click', sendMessage);
 
         if (el.e2eePassOk) {
@@ -2730,6 +3056,7 @@
                     t &&
                     t.closest &&
                     (t.closest('.msg-react-wrap') ||
+                        t.closest('#whiteboard-overlay') ||
                         t.closest('#whiteboard-container') ||
                         t.closest('#floating-text-input'))
                 )
@@ -2833,11 +3160,13 @@
         document.addEventListener('visibilitychange', function () {
             if (!document.hidden) {
                 resetTitleBlink();
+                flushPendingReadReceipts();
             }
         });
         window.addEventListener('focus', function () {
             if (!document.hidden) {
                 resetTitleBlink();
+                flushPendingReadReceipts();
             }
         });
 
@@ -2877,6 +3206,7 @@
             roomDisplay: document.getElementById('room-display'),
             deleteRoomBtn: document.getElementById('delete-room-btn'),
             backLobbyBtn: document.getElementById('back-lobby-btn'),
+            saveChatBtn: document.getElementById('save-chat-btn'),
             infoHelpBtn: document.getElementById('info-help-btn'),
             infoModal: document.getElementById('info-modal'),
             infoModalCloseBtn: document.getElementById('info-modal-close-btn'),
@@ -2885,6 +3215,7 @@
             hackTerminal: document.getElementById('hack-terminal'),
             connStatus: document.getElementById('conn-status'),
             messages: document.getElementById('messages'),
+            chatMessages: document.getElementById('chat-messages'),
             msgInput: document.getElementById('msg-input'),
             sendBtn: document.getElementById('send-btn'),
             typingIndicator: document.getElementById('typing-indicator'),
@@ -2898,8 +3229,8 @@
             e2eePassOk: document.getElementById('e2ee-pass-ok'),
             e2eePassCancel: document.getElementById('e2ee-pass-cancel'),
             whiteboardOpenBtn: document.getElementById('whiteboard-open-btn'),
+            whiteboardOverlay: document.getElementById('whiteboard-overlay'),
             whiteboardContainer: document.getElementById('whiteboard-container'),
-            whiteboardRelativeRoot: document.querySelector('#whiteboard-container .whiteboard-relative-root'),
             floatingTextInput: document.getElementById('floating-text-input'),
             whiteboardCloseBtn: document.getElementById('whiteboard-close-btn'),
             whiteboard: document.getElementById('whiteboard'),

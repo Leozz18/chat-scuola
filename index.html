@@ -102,7 +102,7 @@
                 <ul id="host-waiting-list" class="host-waiting-list"></ul>
             </div>
         </div>
-        <header class="header">
+        <header id="room-header" class="header">
             <div class="header-brand">
                 <span class="logo-dot" aria-hidden="true"></span>
                 <div class="header-titles">
@@ -111,6 +111,7 @@
             </div>
             <div class="header-actions">
                 <button type="button" id="whiteboard-open-btn" class="btn btn-ghost" title="Lavagna condivisa (E2EE)" hidden>🎨 Lavagna</button>
+                <button type="button" id="save-chat-btn" class="btn btn-ghost" title="Scarica la cronologia visibile come file di testo">💾 Salva Chat</button>
                 <button type="button" id="info-help-btn" class="btn btn-ghost info-help-btn" title="Aiuto, sicurezza e comandi">❓ Aiuto</button>
                 <button type="button" id="back-lobby-btn" class="btn btn-ghost" title="Lascia la stanza e torna alla lobby">← Lobby</button>
                 <button type="button" id="delete-room-btn" class="btn btn-danger" title="Elimina questa stanza per tutti (solo host)" hidden>🗑 Elimina stanza</button>
@@ -119,57 +120,63 @@
             </div>
         </header>
 
-        <div class="chat-layout">
-            <main class="main">
-                <div id="messages" class="messages" role="log" aria-live="polite" aria-relevant="additions"></div>
-            </main>
-            <aside class="online-sidebar" aria-label="Utenti online">
+        <div id="room-main">
+            <div id="chat-section">
+                <div class="chat-section-body">
+                    <div id="chat-messages">
+                        <div id="messages" class="messages" role="log" aria-live="polite" aria-relevant="additions"></div>
+                    </div>
+                    <div id="whiteboard-overlay" class="whiteboard-container hidden" aria-hidden="true">
+                        <div id="whiteboard-container" class="whiteboard-viewport">
+                            <div class="whiteboard-relative-root">
+                                <div class="whiteboard-panel" role="dialog" aria-label="Lavagna condivisa">
+                                    <div class="whiteboard-toolbar">
+                                        <span class="whiteboard-title">Lavagna condivisa</span>
+                                        <label class="wb-tool-label">Colore
+                                            <input type="color" id="wb-color" value="#5b8cff" class="wb-color-input" />
+                                        </label>
+                                        <label class="wb-tool-label">Pennello
+                                            <input type="range" id="wb-size" min="1" max="32" value="4" class="wb-size-input" />
+                                        </label>
+                                        <button type="button" id="wb-text-tool" class="btn btn-ghost wb-tool-btn" title="Testo">T</button>
+                                        <button type="button" id="wb-eraser" class="btn btn-ghost wb-tool-btn">Gomma</button>
+                                        <button type="button" id="wb-clear-all" class="btn btn-ghost wb-tool-btn">Pulisci tutti</button>
+                                        <button type="button" id="whiteboard-close-btn" class="btn btn-primary wb-tool-btn">Chiudi</button>
+                                    </div>
+                                    <div class="whiteboard-canvas-wrap">
+                                        <canvas id="whiteboard" width="800" height="600" aria-label="Area disegno lavagna"></canvas>
+                                    </div>
+                                </div>
+                            </div>
+                            <input
+                                type="text"
+                                id="floating-text-input"
+                                class="floating-text-input hidden"
+                                autocomplete="off"
+                                spellcheck="true"
+                                aria-label="Inserisci testo sulla lavagna"
+                            />
+                        </div>
+                    </div>
+                </div>
+                <div id="chat-input-container">
+                    <footer class="composer">
+                        <div class="composer-stack" id="composer-stack">
+                            <div id="mentions-dropdown" class="mentions-dropdown hidden" role="listbox" aria-label="Suggerimenti menzioni"></div>
+                            <div id="typing-indicator" class="typing-indicator hidden" aria-live="polite"></div>
+                            <div class="composer-row">
+                                <label for="msg-input" class="sr-only">Messaggio</label>
+                                <textarea id="msg-input" rows="2" maxlength="500000" placeholder="Scrivi un messaggio… (Invio per inviare, Maiusc+Invio per a capo)"></textarea>
+                                <button type="button" id="send-btn" class="btn btn-primary">Invia</button>
+                            </div>
+                        </div>
+                    </footer>
+                </div>
+            </div>
+            <aside id="room-sidebar" class="online-sidebar" aria-label="Utenti online">
                 <div class="online-sidebar-head">Online</div>
                 <ul id="online-users-list" class="online-users-list"></ul>
             </aside>
-        </div>
-
-        <footer class="composer">
-            <div class="composer-stack" id="composer-stack">
-                <div id="mentions-dropdown" class="mentions-dropdown hidden" role="listbox" aria-label="Suggerimenti menzioni"></div>
-                <div id="typing-indicator" class="typing-indicator hidden" aria-live="polite"></div>
-                <div class="composer-row">
-                    <label for="msg-input" class="sr-only">Messaggio</label>
-                    <textarea id="msg-input" rows="2" maxlength="500000" placeholder="Scrivi un messaggio… (Invio per inviare, Maiusc+Invio per a capo)"></textarea>
-                    <button type="button" id="send-btn" class="btn btn-primary">Invia</button>
-                </div>
-            </div>
-        </footer>
-
-        <div id="whiteboard-container" class="whiteboard-container hidden" aria-hidden="true">
-            <div class="whiteboard-relative-root">
-                <div class="whiteboard-panel" role="dialog" aria-label="Lavagna condivisa">
-                <div class="whiteboard-toolbar">
-                    <span class="whiteboard-title">Lavagna condivisa</span>
-                    <label class="wb-tool-label">Colore
-                        <input type="color" id="wb-color" value="#5b8cff" class="wb-color-input" />
-                    </label>
-                    <label class="wb-tool-label">Pennello
-                        <input type="range" id="wb-size" min="1" max="32" value="4" class="wb-size-input" />
-                    </label>
-                    <button type="button" id="wb-text-tool" class="btn btn-ghost wb-tool-btn" title="Testo">T</button>
-                    <button type="button" id="wb-eraser" class="btn btn-ghost wb-tool-btn">Gomma</button>
-                    <button type="button" id="wb-clear-all" class="btn btn-ghost wb-tool-btn">Pulisci tutti</button>
-                    <button type="button" id="whiteboard-close-btn" class="btn btn-primary wb-tool-btn">Chiudi</button>
-                </div>
-                <div class="whiteboard-canvas-wrap">
-                    <canvas id="whiteboard" width="800" height="600" aria-label="Area disegno lavagna"></canvas>
-                </div>
-            </div>
-            <input
-                type="text"
-                id="floating-text-input"
-                class="floating-text-input hidden"
-                autocomplete="off"
-                spellcheck="true"
-                aria-label="Inserisci testo sulla lavagna"
-            />
-            </div>
         </div>
     </div>
 
@@ -308,6 +315,6 @@ altra riga```</pre>
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
-    <script src="app.js?v=20260216"></script>
+    <script src="app.js?v=20260217"></script>
 </body>
 </html>
