@@ -1,0 +1,11 @@
+# Dati runtime della chat (stanze, messaggi, presenza) — non versionare
+/stanze.php
+
+# OS / editor
+Thumbs.db
+Desktop.ini
+*.swp
+*~
+.DS_Store
+.idea/
+.vscode/

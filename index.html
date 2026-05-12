@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat — Lobby e stanze</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="chat-app-shell">
+    <!-- Schermata 1: solo nickname -->
+    <div id="login-screen" class="screen screen-login" role="dialog" aria-labelledby="login-title" aria-modal="true">
+        <div class="overlay-card">
+            <h1 id="login-title">Accedi</h1>
+            <p class="overlay-hint">Inserisci il tuo nickname. Nella lobby potrai creare o entrare nelle stanze. La password E2EE (se usata) resta solo nel browser e non viene mai inviata al server.</p>
+            <form id="login-form" action="#" method="post" novalidate>
+                <label for="nick-input" class="field-label">Nickname</label>
+                <input type="text" id="nick-input" name="nick" maxlength="32" placeholder="Il tuo nickname" autocomplete="username" autofocus>
+                <button type="submit" id="login-submit" class="btn btn-primary">Continua</button>
+            </form>
+            <p id="login-error" class="error-msg" hidden></p>
+        </div>
+    </div>
+
+    <!-- Schermata 2: lobby -->
+    <div id="lobby-screen" class="screen screen-lobby hidden">
+        <header class="lobby-header">
+            <div class="lobby-brand">
+                <span class="logo-dot" aria-hidden="true"></span>
+                <div>
+                    <h1 class="lobby-title">Lobby</h1>
+                    <p class="lobby-sub">Ciao, <strong id="lobby-you-nick"></strong> — aggiornamento elenco ogni 3 secondi.</p>
+                </div>
+            </div>
+            <div class="lobby-header-actions">
+                <button type="button" id="lobby-create-btn" class="btn btn-primary">Crea nuova stanza</button>
+                <button type="button" id="lobby-logout-btn" class="btn btn-ghost">Esci</button>
+            </div>
+        </header>
+        <main class="lobby-main">
+            <p id="lobby-error" class="error-msg lobby-error" hidden></p>
+            <div id="lobby-empty" class="lobby-empty" hidden>Nessuna stanza attiva. Creane una con il pulsante sopra.</div>
+            <ul id="lobby-list" class="lobby-list" aria-live="polite"></ul>
+        </main>
+    </div>
+
+    <!-- Schermata 3: in attesa approvazione (stanza privata) -->
+    <div id="waiting-screen" class="screen screen-waiting hidden">
+        <div class="overlay-card waiting-card">
+            <h1>In attesa dell’host</h1>
+            <p class="overlay-hint">Stanza <strong id="waiting-room-name"></strong>. L’host deve approvare la tua richiesta. La password E2EE è solo nella memoria del browser; non viene inviata al server.</p>
+            <p class="waiting-pulse" aria-live="polite">In attesa dell’approvazione dell’host…</p>
+            <button type="button" id="waiting-cancel-btn" class="btn btn-ghost">Annulla e torna alla lobby</button>
+        </div>
+    </div>
+
+    <!-- Modale crea stanza -->
+    <div id="modal-create" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="modal-create-title">
+        <div class="modal-backdrop" data-close-modal></div>
+        <div class="modal-card">
+            <h2 id="modal-create-title">Crea stanza</h2>
+            <form id="create-room-form" action="#" novalidate>
+                <label for="create-room-name" class="field-label">Nome stanza</label>
+                <input type="text" id="create-room-name" maxlength="48" placeholder="es. Progetto gruppo 4" autocomplete="off" required>
+                <fieldset class="field-fieldset">
+                    <legend class="field-label">Tipo</legend>
+                    <label class="radio-row"><input type="radio" name="create-room-type" value="public" checked> Pubblica (chiunque può entrare)</label>
+                    <label class="radio-row"><input type="radio" name="create-room-type" value="private"> Privata (richiesta approvazione host)</label>
+                </fieldset>
+                <label for="create-room-pass" class="field-label">Password E2EE <span class="field-optional">(opzionale)</span></label>
+                <input type="password" id="create-room-pass" maxlength="64" placeholder="Solo nel browser; stessa chiave per i partecipanti" autocomplete="new-password">
+                <p class="field-hint">Se impostata, i messaggi vengono cifrati nel browser (CryptoJS) prima dell’invio. Il server vede solo stringhe opache.</p>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-ghost" id="create-room-cancel">Annulla</button>
+                    <button type="submit" class="btn btn-primary" id="create-room-submit">Crea</button>
+                </div>
+            </form>
+            <p id="create-room-error" class="error-msg" hidden></p>
+        </div>
+    </div>
+
+    <!-- Modale password E2EE (entra / richiedi accesso — type=password) -->
+    <div id="modal-e2ee" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="modal-e2ee-title">
+        <div class="modal-backdrop" data-close-e2ee></div>
+        <div class="modal-card">
+            <h2 id="modal-e2ee-title">Password E2EE</h2>
+            <p id="modal-e2ee-hint" class="overlay-hint"></p>
+            <label for="e2ee-pass-input" class="field-label">Password stanza <span class="field-optional">(opzionale)</span></label>
+            <input type="password" id="e2ee-pass-input" maxlength="64" placeholder="Solo nel browser; non inviata al server" autocomplete="new-password">
+            <div class="modal-actions">
+                <button type="button" class="btn btn-ghost" id="e2ee-pass-cancel">Annulla</button>
+                <button type="button" class="btn btn-primary" id="e2ee-pass-ok">Continua</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Schermata 4: chat -->
+    <div id="chat-screen" class="app hidden">
+        <div id="host-panel" class="host-panel" hidden>
+            <div class="host-panel-inner">
+                <span class="host-panel-label">In coda (in attesa di approvazione):</span>
+                <ul id="host-waiting-list" class="host-waiting-list"></ul>
+            </div>
+        </div>
+        <header class="header">
+            <div class="header-brand">
+                <span class="logo-dot" aria-hidden="true"></span>
+                <div class="header-titles">
+                    <h1 class="header-chat-title"><span class="header-prefix">Chat:</span> <strong id="room-display"></strong></h1>
+                </div>
+            </div>
+            <div class="header-actions">
+                <button type="button" id="whiteboard-open-btn" class="btn btn-ghost" title="Lavagna condivisa (E2EE)" hidden>🎨 Lavagna</button>
+                <button type="button" id="info-help-btn" class="btn btn-ghost info-help-btn" title="Aiuto, sicurezza e comandi">❓ Aiuto</button>
+                <button type="button" id="back-lobby-btn" class="btn btn-ghost" title="Lascia la stanza e torna alla lobby">← Lobby</button>
+                <button type="button" id="delete-room-btn" class="btn btn-danger" title="Elimina questa stanza per tutti (solo host)" hidden>🗑 Elimina stanza</button>
+                <span class="badge" id="you-badge">Tu: <strong id="you-nick"></strong></span>
+                <span class="status" id="conn-status" title="Stato sincronizzazione">●</span>
+            </div>
+        </header>
+
+        <div class="chat-layout">
+            <main class="main">
+                <div id="messages" class="messages" role="log" aria-live="polite" aria-relevant="additions"></div>
+            </main>
+            <aside class="online-sidebar" aria-label="Utenti online">
+                <div class="online-sidebar-head">Online</div>
+                <ul id="online-users-list" class="online-users-list"></ul>
+            </aside>
+        </div>
+
+        <footer class="composer">
+            <div class="composer-stack" id="composer-stack">
+                <div id="mentions-dropdown" class="mentions-dropdown hidden" role="listbox" aria-label="Suggerimenti menzioni"></div>
+                <div id="typing-indicator" class="typing-indicator hidden" aria-live="polite"></div>
+                <div class="composer-row">
+                    <label for="msg-input" class="sr-only">Messaggio</label>
+                    <textarea id="msg-input" rows="2" maxlength="500000" placeholder="Scrivi un messaggio… (Invio per inviare, Maiusc+Invio per a capo)"></textarea>
+                    <button type="button" id="send-btn" class="btn btn-primary">Invia</button>
+                </div>
+            </div>
+        </footer>
+
+        <div id="whiteboard-container" class="whiteboard-container hidden" aria-hidden="true">
+            <div class="whiteboard-relative-root">
+                <div class="whiteboard-panel" role="dialog" aria-label="Lavagna condivisa">
+                <div class="whiteboard-toolbar">
+                    <span class="whiteboard-title">Lavagna condivisa</span>
+                    <label class="wb-tool-label">Colore
+                        <input type="color" id="wb-color" value="#5b8cff" class="wb-color-input" />
+                    </label>
+                    <label class="wb-tool-label">Pennello
+                        <input type="range" id="wb-size" min="1" max="32" value="4" class="wb-size-input" />
+                    </label>
+                    <button type="button" id="wb-text-tool" class="btn btn-ghost wb-tool-btn" title="Testo">T</button>
+                    <button type="button" id="wb-eraser" class="btn btn-ghost wb-tool-btn">Gomma</button>
+                    <button type="button" id="wb-clear-all" class="btn btn-ghost wb-tool-btn">Pulisci tutti</button>
+                    <button type="button" id="whiteboard-close-btn" class="btn btn-primary wb-tool-btn">Chiudi</button>
+                </div>
+                <div class="whiteboard-canvas-wrap">
+                    <canvas id="whiteboard" width="800" height="600" aria-label="Area disegno lavagna"></canvas>
+                </div>
+            </div>
+            <input
+                type="text"
+                id="floating-text-input"
+                class="floating-text-input hidden"
+                autocomplete="off"
+                spellcheck="true"
+                aria-label="Inserisci testo sulla lavagna"
+            />
+            </div>
+        </div>
+    </div>
+
+    <!-- Modale Aiuto / Info (solo frontend) -->
+    <div id="info-modal" class="info-modal" hidden role="dialog" aria-modal="true" aria-labelledby="info-modal-title">
+        <div class="info-modal-backdrop" data-close-info tabindex="-1"></div>
+        <div class="info-modal-card">
+            <button type="button" id="info-modal-close-x" class="info-modal-close-x" aria-label="Chiudi finestra">×</button>
+            <h2 id="info-modal-title" class="info-modal-title">Aiuto e funzioni avanzate</h2>
+            <div class="info-modal-body">
+                <section class="info-section">
+                    <h3 class="info-section-title">🔒 Sicurezza</h3>
+                    <p>Quando usi una <strong>password E2EE</strong> per la stanza, messaggi e immagini vengono cifrati <strong>end-to-end</strong> nel browser con <strong>CryptoJS (AES)</strong> prima dell’invio. Il server scolastico memorizza solo dati opachi e incomprensibili senza la chiave che resta sul tuo dispositivo.</p>
+                </section>
+                <section class="info-section">
+                    <h3 class="info-section-title">🖼️ Immagini</h3>
+                    <p>Puoi incollare un’immagine direttamente nel box di scrittura: copia l’immagine (o uno screenshot), poi nel campo messaggio premi <strong>Ctrl+V</strong> (o equivalente). L’immagine viene ridimensionata e compressa nel browser e inviata in modo sicuro come messaggio speciale.</p>
+                </section>
+                <section class="info-section">
+                    <h3 class="info-section-title">💻 Codice</h3>
+                    <p>Racchiudi il testo tra <strong>tripli backtick</strong> (tre accenti gravi, come nel Markdown) per mostrarlo come blocco di codice monospaziato.</p>
+                    <pre class="info-code-sample" aria-label="Esempio">```riga di codice
+altra riga```</pre>
+                </section>
+                <section class="info-section">
+                    <h3 class="info-section-title">⌨️ Comandi speciali</h3>
+                    <p class="info-lead">Scrivi questi comandi all’inizio del messaggio:</p>
+                    <ul class="info-cmd-list">
+                        <li><code>/nick [nome]</code> — Cambia il tuo nome al volo.</li>
+                        <li><code>/me [azione]</code> — Scrive un’azione in corsivo.</li>
+                        <li><code>/clear</code> — Pulisce la tua schermata (solo locale).</li>
+                        <li><code>/burn [secondi] [testo]</code> — Invia un messaggio che si autodistrugge dopo il tempo impostato.</li>
+                        <li><code>/poll "Domanda" "Op1" "Op2" ["Op3"] ["Op4"]</code> — Crea un sondaggio (2–4 opzioni); i voti aggiornano le barre in tempo reale.</li>
+                        <li><code>/hack</code> — Easter egg locale (non invia nulla al server).</li>
+                    </ul>
+                </section>
+            </div>
+            <div class="info-modal-footer">
+                <button type="button" id="info-modal-close-btn" class="btn btn-primary info-modal-close-btn">Chiudi</button>
+            </div>
+        </div>
+    </div>
+    </div><!-- /#chat-app-shell -->
+
+    <!-- Easter egg /hack (solo client) -->
+    <div id="hack-overlay" class="hack-overlay hidden" aria-hidden="true">
+        <div class="hack-scanlines" aria-hidden="true"></div>
+        <div class="hack-terminal" id="hack-terminal"></div>
+    </div>
+
+    <!-- Stealth / Boss Key: finto editor (solo visuale) -->
+    <div id="boss-screen" class="boss-screen" aria-hidden="true">
+        <div class="boss-chrome">
+            <div class="boss-titlebar">
+                <span class="boss-titlebar-dots" aria-hidden="true"></span>
+                <span class="boss-titlebar-title">query_lab.py — Informatica</span>
+            </div>
+            <div class="boss-toolbar">
+                <span class="boss-breadcrumb">esercitazioni <span class="boss-sep">›</span> modulo_4 <span class="boss-sep">›</span> <strong>query_lab.py</strong></span>
+                <span class="boss-toolbar-meta">Python 3.11 · UTF-8 · 4 spazi</span>
+            </div>
+        </div>
+        <div class="boss-main">
+            <aside class="boss-sidebar" aria-hidden="true">
+                <div class="boss-sidebar-head">ESPLORA</div>
+                <ul class="boss-tree">
+                    <li class="boss-tree-folder">📁 dati</li>
+                    <li class="boss-tree-file boss-tree-file--sel">query_lab.py</li>
+                    <li class="boss-tree-file">schema.sql</li>
+                    <li class="boss-tree-file">README.md</li>
+                </ul>
+            </aside>
+            <div class="boss-editor-wrap">
+                <div class="boss-gutter" aria-hidden="true">1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30</div>
+                <pre class="boss-code" id="boss-code-block"><code><span class="boss-cm">"""</span> <span class="boss-cm">Esercitazione: query parametriche su DB scolastico (solo lettura)</span> <span class="boss-cm">"""</span>
+
+<span class="boss-kw">import</span> sqlite3
+<span class="boss-kw">from</span> typing <span class="boss-kw">import</span> List, Tuple
+
+<span class="boss-kw">def</span> <span class="boss-fn">carica_voti_classe</span>(<span class="boss-arg">db_path</span>: <span class="boss-builtin">str</span>, <span class="boss-arg">classe_id</span>: <span class="boss-builtin">int</span>) -&gt; List[Tuple[<span class="boss-builtin">str</span>, <span class="boss-builtin">float</span>]]:
+    <span class="boss-cm"># Connessione sicura: niente string formatting sulla query</span>
+    conn = sqlite3.<span class="boss-fn">connect</span>(db_path)
+    conn.row_factory = sqlite3.Row
+    cur = conn.<span class="boss-fn">cursor</span>()
+    sql = <span class="boss-str">"""
+        SELECT s.cognome, s.nome, m.voto
+        FROM studenti AS s
+        JOIN materie_voti AS m ON m.studente_id = s.id
+        WHERE s.classe_id = ?
+          AND m.anno_scolastico = ?
+        ORDER BY s.cognome, s.nome;
+    """</span>
+    cur.<span class="boss-fn">execute</span>(sql, (classe_id, <span class="boss-str">'2026/2027'</span>))
+    <span class="boss-kw">return</span> [(<span class="boss-str">f"{row['cognome']} {row['nome']}"</span>, <span class="boss-fn">float</span>(row[<span class="boss-str">'voto'</span>])) <span class="boss-kw">for</span> row <span class="boss-kw">in</span> cur.fetchall()]
+
+<span class="boss-kw">if</span> __name__ == <span class="boss-str">'__main__'</span>:
+    risultati = <span class="boss-fn">carica_voti_classe</span>(<span class="boss-str">'./data/scuola.db'</span>, <span class="boss-num">3</span>)
+    <span class="boss-kw">for</span> nominativo, voto <span class="boss-kw">in</span> risultati:
+        <span class="boss-fn">print</span>(<span class="boss-str">f"{nominativo}: {voto:.1f}"</span>)</code></pre>
+            </div>
+        </div>
+        <div class="boss-statusbar">
+            <span>Ln 12, Col 18</span>
+            <span class="boss-statusbar-gap">UTF-8</span>
+            <span>Python</span>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+    <script src="app.js?v=20260216"></script>
+</body>
+</html>
