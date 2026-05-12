@@ -101,7 +101,7 @@ La modale **Aiuto** nell’interfaccia riassume sicurezza e comandi.
 
 ## Licenza e contributi
 
-Progetto personale / scolastico: aggiungi una licenza nel repo se vuoi distribuirlo formalmente. Pull request e miglioramenti sono benvenuti se rendi il repo pubblico.
+Progetto personale / scolastico.
 
 ---
 
